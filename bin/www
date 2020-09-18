@@ -1,0 +1,214 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+const WebSocket = require('ws');
+const ws = require("../wslib");
+var app = require("../app");
+var debug = require("debug")("chat:server");
+var http = require("http");
+const fs = require("fs");
+const Joi = require("joi");
+
+
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || "3000");
+app.set("port", port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+ws.wsConnection(server);
+const apiSocket = new WebSocket("ws://localhost:3000");
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+server.on("error", onError);
+server.on("listening", onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== "listen") {
+    throw error;
+  }
+
+  var bind = typeof port === "string" ? "Pipe " + port : "Port " + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case "EACCES":
+      console.error(bind + " requires elevated privileges");
+      process.exit(1);
+      break;
+    case "EADDRINUSE":
+      console.error(bind + " is already in use");
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === "string" ? "pipe " + addr : "port " + addr.port;
+  debug("Listening on " + bind);
+}
+
+/**
+ * Endpoints
+ */
+
+app.get("/chat/api/messages", (req, res) => {
+  fs.readFile("./bin/mensajes.json", "utf8", function (err, data) {
+    if (err) {
+      console.log(err);
+      return res.status(404).send("Error de lectura");
+    } else {
+      const parsed = JSON.parse(data);
+      res.send(parsed.mensajes);
+    }
+  });
+});
+
+app.get("/chat/api/messages/:ts", (req, res) => {
+  const ts = req.params.ts;
+  fs.readFile("./bin/mensajes.json", "utf8", function (err, data) {
+    if (err) {
+      console.log(err);
+      return res.status(404).send("Error de lectura");
+    } else {
+      let parsed = JSON.parse(data);
+      const message = parsed.mensajes.find((m) => m.ts == ts);
+      if (!message) {
+        return res.status(404).send("El mensaje no existe");
+      }
+      res.send(message);
+    }
+  });
+});
+
+app.post("/chat/api/messages", (req, res) => {
+  console.log(req.body);
+  const schema = Joi.object({
+    message: Joi.string().min(5).required(),
+    author: Joi.string().required(),
+  });
+  const { error } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).send(error);
+  }
+  const obj = req.body;
+  obj["ts"] = Date.now().toString();
+  fs.readFile("./bin/mensajes.json", "utf8", function (err, data) {
+    if (err) {
+      console.log(err);
+      return res.status(404).send("Error de lectura");
+    } else {
+      let parsed = JSON.parse(data);
+      parsed.mensajes.push(obj);
+      parsed = JSON.stringify(parsed, null, 2);
+      fs.writeFile("./bin/mensajes.json", parsed, (error) => {
+        if (error) return res.status(404).send("Error de escritura");
+      });
+    }
+  });
+  res.send(req.body);
+});
+
+app.put("/chat/api/messages", (req, res) => {
+  const schema = Joi.object({
+    message: Joi.string().min(5).required(),
+    author: Joi.string().pattern(new RegExp("\\b([A-ZÀ-ÿ][-,a-z. ']+[ ]*)+")),
+    ts: Joi.required(),
+  });
+  const { error } = schema.validate(req.body);
+  if (error) {
+    return res.status(400).send(error);
+  }
+  const obj = req.body;
+  const ts = obj["ts"];
+  fs.readFile("./bin/mensajes.json", "utf8", function (err, data) {
+    if (err) {
+      console.log(err);
+      return res.status(404).send("Error de lectura");
+    } else {
+      let parsed = JSON.parse(data);
+      let found = false;
+      parsed.mensajes.forEach((element) => {
+        if (!found && element.ts == ts) {
+          element.message = obj.message;
+          element.author = obj.author;
+          found = true;
+        }
+      });
+      if (!found) {
+        return res.status(404).send("El mensaje no existe");
+      }
+      parsed = JSON.stringify(parsed, null, 2);
+      fs.writeFile("./bin/mensajes.json", parsed, (error) => {
+        if (error) return res.status(404).send("Error de escritura");
+      });
+    }
+  });
+  res.send(obj);
+  apiSocket.send(obj);
+});
+
+app.delete("/chat/api/messages/:ts", (req, res) => {
+  const ts = req.params.ts;
+  fs.readFile("./bin/mensajes.json", "utf8", function (err, data) {
+    if (err) {
+      console.log(err);
+      return res.status(404).send("Error de lectura");
+    } else {
+      let parsed = JSON.parse(data);
+      const mensajes = parsed.mensajes.filter((m) => m.ts != ts);
+      if (mensajes == parsed.mensajes) {
+        return res.status(404).send("El mensaje no existe");
+      }
+      parsed.mensajes = mensajes;
+      parsed = JSON.stringify(parsed, null, 2);
+      fs.writeFile("./bin/mensajes.json", parsed, (error) => {
+        if (error) return res.status(404).send("Error de escritura");
+      });
+    }
+  });
+  res.send("El mensaje con ts: " + ts + " fue eliminado.");
+});
